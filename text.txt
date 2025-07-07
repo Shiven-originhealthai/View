@@ -1,0 +1,947 @@
+'use client';
+
+import { useEffect, useRef, useState } from 'react';
+import {
+  RenderingEngine,
+  Enums,
+  imageLoader,
+  metaData,
+  StackViewport,
+  init as cornerstoneCoreInit,
+} from '@cornerstonejs/core';
+
+import {
+  init as cornerstoneToolsInit,
+  ToolGroupManager,
+  Enums as csToolsEnums,
+  addTool,
+  PanTool,
+  ZoomTool,
+  WindowLevelTool,
+  LengthTool,
+  RectangleROITool,
+  EllipticalROITool,
+  AngleTool,
+} from '@cornerstonejs/tools';
+
+import hardcodedMetaDataProvider from '../lib/hardcodedMetaDataProvider';
+
+const renderingEngineId = 'myRenderingEngine';
+const viewportId = 'myViewport';
+const toolGroupId = 'myToolGroup';
+
+export default function DicomViewer() {
+  const elementRef = useRef<HTMLDivElement>(null);
+  const [loaded, setLoaded] = useState(false);
+  const renderingEngineRef = useRef<RenderingEngine | null>(null);
+  const objectUrlRef = useRef<string | null>(null);
+
+  const fetchDicomFile = async () => {
+    const response = await fetch('/image1.dcm');
+    return await response.blob();
+  };
+
+  useEffect(() => {
+    const initialize = async () => {
+      const {
+        init: dicomLoaderInit,
+        wadouri,
+      } = await import('@cornerstonejs/dicom-image-loader');
+
+      // Init all Cornerstone modules
+      await cornerstoneCoreInit();
+      await dicomLoaderInit();
+      await cornerstoneToolsInit();
+
+      // Register metaData provider
+      metaData.addProvider(
+        (type, imageId) => hardcodedMetaDataProvider(type, imageId, imageId),
+        10000
+      );
+
+      // Register the image loader
+      imageLoader.registerImageLoader('wadouri', (imageId) => {
+        const load = wadouri.loadImage(imageId);
+        return {
+          promise: load.promise,
+          cancelFn: load.cancelFn,
+          decache: load.decache,
+        };
+      });
+
+      // Load and prepare DICOM image
+      const blob = await fetchDicomFile();
+      objectUrlRef.current = URL.createObjectURL(blob);
+      const imageId = `wadouri:${objectUrlRef.current}`;
+
+      // Prepare DOM element
+      const element = elementRef.current!;
+      element.style.width = '512px';
+      element.style.height = '512px';
+      element.style.position = 'relative';
+      element.tabIndex = 0;
+
+      const renderingEngine = new RenderingEngine(renderingEngineId);
+      renderingEngineRef.current = renderingEngine;
+
+      renderingEngine.setViewports([
+        {
+          viewportId,
+          type: Enums.ViewportType.STACK,
+          element,
+        },
+      ]);
+
+      const viewport = renderingEngine.getViewport(viewportId) as StackViewport;
+      await viewport.setStack([imageId]);
+      viewport.render();
+
+      // Add Tools
+      [PanTool, ZoomTool, WindowLevelTool, LengthTool, RectangleROITool, EllipticalROITool, AngleTool].forEach(addTool);
+
+      // ToolGroup
+      const toolGroup = ToolGroupManager.createToolGroup(toolGroupId);
+      if (!toolGroup) return;
+
+      [
+        PanTool,
+        ZoomTool,
+        WindowLevelTool,
+        LengthTool,
+        RectangleROITool,
+        EllipticalROITool,
+        AngleTool,
+      ].forEach((Tool) => {
+        toolGroup.addTool(Tool.toolName);
+      });
+
+      /*toolGroup.setToolActive(RectangleROITool.toolName, {
+        bindings: [{ mouseButton: csToolsEnums.MouseBindings.Primary }],
+      })*/;
+
+      toolGroup.addViewport(viewportId, renderingEngineId);
+
+      setLoaded(true);
+    };
+
+    initialize();
+
+    return () => {
+      if (objectUrlRef.current) {
+        URL.revokeObjectURL(objectUrlRef.current);
+        objectUrlRef.current = null;
+      }
+      //ToolGroupManager.destroyToolGroup(toolGroupId);
+    };
+  }, []);
+
+  const handleToolChange = (tool: string) => {
+    console.log('Clicked')
+    const toolGroup = ToolGroupManager.getToolGroup(toolGroupId);
+    console.log(toolGroup?.currentActivePrimaryToolName)
+    if (!toolGroup) return;
+    console.log(tool)
+    toolGroup.setToolActive(tool, {
+        bindings: [{ mouseButton: csToolsEnums.MouseBindings.Primary }],
+      });
+    
+    /*const renderingEngine = renderingEngineRef.current
+    if(renderingEngine){
+      const viewport = renderingEngine.getViewport(viewportId)
+      if(viewport){
+        viewport.render()
+      }
+    }
+  */ };  
+
+  return (
+    <div className="flex flex-col items-center justify-center min-h-screen bg-black text-white p-6">
+      <h2 className="text-xl font-bold mb-4">Cornerstone DICOM Viewer</h2>
+
+      {loaded && (
+        <div className="flex flex-wrap justify-center gap-3 mb-4">
+          {[RectangleROITool, PanTool, ZoomTool, WindowLevelTool, LengthTool, EllipticalROITool, AngleTool].map(
+            (Tool) => (
+              <button
+                key={Tool.toolName}
+                onClick={() => handleToolChange(Tool.toolName)}
+                className="bg-gray-700 px-4 py-2 rounded hover:bg-gray-600"
+              >
+                {Tool.toolName}
+              </button>
+            )
+          )}
+        </div>
+      )}
+
+      <div
+        ref={elementRef}
+        className="border border-gray-500"
+        style={{ width: '512px', height: '512px', touchAction: 'none' }}
+      />
+    </div>
+  );
+}
+
+
+'use client';
+
+import { useRef, useState } from "react";
+import DicomViewer from "./DicomViewer";
+
+export default function Upload() {
+  const [dicomFile, setDicomFile] = useState<File | undefined>(undefined);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (file) {
+      setDicomFile(file);
+    }
+  }
+
+  function handleButtonClick() {
+    fileInputRef.current?.click();
+  }
+
+  // If file is uploaded, show only the viewer
+
+
+  return (
+    <div className="flex flex-col items-center justify-center min-h-screen bg-gray-900 text-white">
+      <h2 className="text-2xl font-bold mb-6">Upload a DICOM File</h2>
+      <input
+        type="file"
+        accept=".dcm,application/dicom"
+        onChange={handleFileChange}
+        ref={fileInputRef}
+        className="hidden"
+        disabled={!!dicomFile}
+      />
+      <button
+        onClick={handleButtonClick}
+        disabled={!!dicomFile}
+        className={`px-6 py-3 rounded-lg font-semibold transition-colors ${
+          dicomFile
+            ? "bg-gray-500 cursor-not-allowed"
+            : "bg-blue-600 hover:bg-blue-700"
+        }`}
+      >
+        {dicomFile ? "File Uploaded" : "Select DICOM File"}
+      </button>
+      <p className="mt-4 text-gray-400">Supported: .dcm files</p>
+      {dicomFile && <DicomViewer dicomFile={dicomFile}/>}
+    </div>
+  );
+}
+
+
+
+"use client";
+import { useEffect, useRef, useState } from "react";
+import {
+  RenderingEngine,
+  Enums,
+  StackViewport,
+  metaData,
+} from "@cornerstonejs/core";
+import {
+  wadouri,
+} from "@cornerstonejs/dicom-image-loader";
+import {
+  ToolGroupManager,
+  addTool,
+  PanTool,
+  ZoomTool,
+  WindowLevelTool,
+  LengthTool,
+  RectangleROITool,
+  EllipticalROITool,
+  AngleTool,
+} from "@cornerstonejs/tools";
+import initializeCornerstone from "../dummy/dummy";
+import hardcodedMetaDataProvider from "../lib/hardcodedMetaDataProvider";
+import { MouseBindings } from "@cornerstonejs/tools/enums/ToolBindings";
+const renderingEngineId = "engine1";
+const viewportId = "viewport1";
+const toolGroupId = "toolGroup1";
+const allTools = [
+  PanTool.toolName,
+  ZoomTool.toolName,
+  WindowLevelTool.toolName,
+  LengthTool.toolName,
+  RectangleROITool.toolName,
+  EllipticalROITool.toolName,
+  AngleTool.toolName,
+];
+export default function HomePageComponent() {
+  const elementRef = useRef<HTMLDivElement>(null);
+  const [loaded, setLoaded] = useState(false);
+  let isCornerStoneInitialized = false;
+  const fetchFile = async () => {
+    const file = await fetch("/image1.dcm");
+    return await file.blob();
+  };
+  useEffect(() => {
+    const initi = async () => {
+      if(!isCornerStoneInitialized){
+        initializeCornerstone()
+        isCornerStoneInitialized = true;
+      }
+      if (!elementRef.current) return;
+      const element = elementRef.current;
+      const imageBlob = await fetchFile();
+      const imageId = wadouri.fileManager.add(imageBlob);
+      metaData.addProvider(
+        (type, imageId) => hardcodedMetaDataProvider(type, imageId, imageId),
+        10000
+      );
+      const renderingEngine = new RenderingEngine(renderingEngineId);
+      renderingEngine.setViewports([
+        {
+          viewportId,
+          type: Enums.ViewportType.STACK,
+          element,
+        },
+      ]);
+      const viewport = renderingEngine.getViewport(viewportId) as StackViewport;
+      await viewport.setStack([imageId], 0);
+      addTool(PanTool);
+      addTool(ZoomTool);
+      addTool(WindowLevelTool);
+      addTool(LengthTool);
+      addTool(RectangleROITool);
+      addTool(EllipticalROITool);
+      addTool(AngleTool);
+      const toolGroup = ToolGroupManager.createToolGroup(toolGroupId);
+      if (!toolGroup) return;
+      allTools.forEach((toolName) => {
+        toolGroup.addTool(toolName);
+      });
+      toolGroup.addViewport(viewportId, renderingEngineId);
+      // requestAnimationFrame(() => {
+      //   viewport.resize();
+      // });
+       await viewport.render();
+      setLoaded(true);
+    };
+    initi();
+  }, []);
+  const handleToolChange = (toolName: string) => {
+    const toolGroup = ToolGroupManager.getToolGroup(toolGroupId);
+    if (!toolGroup) return;
+    allTools.forEach((t) => {
+      if (t !== toolName) toolGroup.setToolPassive(t);
+    });
+    const bindings =
+      toolName === WindowLevelTool.toolName
+        ? [
+            { mouseButton: MouseBindings.Primary },
+            { mouseWheel: true },
+          ]
+        : [{ mouseButton: MouseBindings.Primary }];
+    toolGroup.setToolActive(toolName, { bindings });
+  };
+  return (
+    <div className="min-h-screen bg-black text-white flex flex-col items-center justify-center p-4">
+      <h1 className="text-2xl font-bold mb-6">DICOM Viewer</h1>
+      {loaded && (
+        <div className="flex gap-4 mb-4 flex-wrap justify-center">
+          <button onClick={() => handleToolChange(RectangleROITool.toolName)} className="bg-gray-700 px-4 py-2 rounded">
+            Rectangle
+          </button>
+          <button onClick={() => handleToolChange(PanTool.toolName)} className="bg-gray-700 px-4 py-2 rounded">
+            Pan
+          </button>
+          <button onClick={() => handleToolChange(ZoomTool.toolName)} className="bg-gray-700 px-4 py-2 rounded">
+            Zoom
+          </button>
+          <button onClick={() => handleToolChange(WindowLevelTool.toolName)} className="bg-gray-700 px-4 py-2 rounded">
+            Brightness
+          </button>
+          <button onClick={() => handleToolChange(LengthTool.toolName)} className="bg-gray-700 px-4 py-2 rounded">
+            Length
+          </button>
+          <button onClick={() => handleToolChange(EllipticalROITool.toolName)} className="bg-gray-700 px-4 py-2 rounded">
+            Ellipse
+          </button>
+          <button onClick={() => handleToolChange(AngleTool.toolName)} className="bg-gray-700 px-4 py-2 rounded">
+            Angle
+          </button>
+        </div>
+      )}
+      <div
+        ref={elementRef}
+        className="w-[512px] h-[512px] border border-gray-500 bg-black"
+      />
+    </div>
+  );
+}
+
+
+
+
+
+
+bg-yellow-200 w-2 h-2 rounded absolute top-3.5 left-[6.16%] bottom-3 right-1 cursor-pointer
+
+
+          <div className="relative">
+            {bookmarklabel && (
+              <div
+                className="bg-yellow-200 w-2 h-2 rounded absolute top-3.5 bottom-3 right-1 cursor-pointer"
+                style={{ left: getBookmarkLeft(frameIndex, totalFrames) }}   // 👈 left % from function
+              ></div>
+            )}
+            <input
+              type="range"
+              min="0"
+              max={Math.max(totalFrames - 1, 0)}
+              value={frameIndex}
+              onChange={handleSliderChange}
+              className="w-full mt-2"
+            />
+          </div>
+
+
+
+            <div className="flex items-center justify-center h-[100vh]">
+                <input type="file" className="w-50 h-10 bg-black text-white flex flex-col " accept='.dcm' onChange={handlefilechange} />
+            </div>
+            {blobstate && <DicomViewer file={blob}/>}
+
+
+
+            'use client';
+
+import { useEffect, useRef, useState } from 'react';
+import {
+  RenderingEngine,
+  Enums,
+  metaData,
+  init as cornerstoneCoreInit,
+  type Types,
+  imageLoader,
+  eventTarget,
+} from '@cornerstonejs/core';
+import {
+  init as cornerstoneToolsInit,
+  ToolGroupManager,
+  Enums as csToolsEnums,
+  addTool,
+  PanTool,
+  ZoomTool,
+  WindowLevelTool,
+  LengthTool,
+  RectangleROITool,
+  EllipticalROITool,
+  AngleTool,
+  state as annotationState,
+  annotation,
+} from '@cornerstonejs/tools';
+import { utilities } from '@cornerstonejs/tools';
+
+// Later in your code when you need to render:
+
+
+const renderingEngineId = 'myRenderingEngine';
+const viewportId = 'myViewport';
+const toolGroupId = 'myToolGroup';
+const annotationGroupId = 'annotationgroupid'
+import { getAnnotationManager } from '@cornerstonejs/tools/annotation/annotationState';
+import { viewport } from '@cornerstonejs/tools/utilities';
+interface DicomViewer{
+  dicomFile:File|Blob
+}
+
+
+export default function DicomViewer({dicomFile}:DicomViewer) {
+  const elementRef = useRef<HTMLDivElement | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const renderingEngineRef = useRef<RenderingEngine | null>(null);
+  const viewportRef = useRef<Types.IStackViewport | null>(null);
+  const [frameIndex, setFrameIndex] = useState<number>(0);
+  const [totalFrames, setTotalFrames] = useState<number>(0);
+  const [isPlaying, setIsPlaying] = useState<boolean>(false);
+  const [imageIds, setImageIds] = useState<string[]>([]);
+  const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const [bookmarklabel, setbookmark] = useState(false)
+  const [bookmarkarray, setbookmarkarray] = useState<number[]>([])
+  const [toolusedonframe, settoolusedonframe] = useState<string[]>([]);
+  const prevFrameIndexRef = useRef<number>(-1);
+  const[activetool,settool] = useState(false)
+  let bookmarkedindex: number = 0
+
+
+  const [logs, setLogs] = useState<string[]>([]);
+  const undostack: any = []
+  const redostack: any = []
+
+  const addLog = (message: string) => {
+    console.log(message);
+    setLogs(prev => [...prev, `${new Date().toLocaleTimeString()}: ${message}`]);
+  };
+
+  const fetchDicomFile = async (): Promise<Blob> => {
+    addLog('Fetching DICOM file...');
+    const response = await fetch('/dicom_1.dcm');
+    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+    addLog('DICOM file fetched successfully');
+    return await response.blob();
+  };
+
+  const renderFrame = (index: number) => {
+    if (!viewportRef.current || imageIds.length === 0) return;
+
+    try {
+      addLog(`Rendering frame ${index + 1}/${imageIds.length}`);
+      viewportRef.current.setImageIdIndex(index);
+      viewportRef.current.render();
+      setFrameIndex(index);
+    } catch (error) {
+      addLog(`Error rendering frame: ${error}`);
+    }
+  };
+
+  const handleSliderChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const index = parseInt(e.target.value, 10);
+    renderFrame(index);
+  };
+
+  const handleNext = () => {
+    const nextIndex = (frameIndex + 1) % totalFrames;
+    renderFrame(nextIndex);
+  };
+
+  const handlePrev = () => {
+    const prevIndex = (frameIndex - 1 + totalFrames) % totalFrames;
+    renderFrame(prevIndex);
+  };
+
+  const handlePlayPause = () => {
+    if (isPlaying) {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+      setIsPlaying(false);
+    } else {
+      const frameRate = 1000 / 10;
+      intervalRef.current = setInterval(() => {
+        setFrameIndex(prev => {
+          const nextIndex = (prev + 1) % totalFrames;
+          renderFrame(nextIndex);
+          return nextIndex;
+        });
+      }, frameRate);
+      setIsPlaying(true);
+    }
+  };
+
+  useEffect(() => {
+    const initialize = async () => {
+      addLog('Initializing Cornerstone...');
+      const { init: dicomLoaderInit, wadouri } = await import('@cornerstonejs/dicom-image-loader');
+
+      await cornerstoneCoreInit();
+      await dicomLoaderInit();
+      await cornerstoneToolsInit();
+
+      const blob = await fetchDicomFile();
+      const imageId = wadouri.fileManager.add(blob);
+      console.log(imageId)
+
+
+      const image = await imageLoader.loadImage(imageId)
+      console.log(image)
+      const metadata = metaData.get("multiframeModule", imageId);
+      console.log("Multiframe metadata:", metadata);
+      const numberOfFrames = metadata.NumberOfFrames
+
+      addLog(`Extracted NumberOfFrames from metadata: ${numberOfFrames}`);
+      setTotalFrames(numberOfFrames);
+
+      //const generatedImageIds = Array.from({ length: numberOfFrames }, (_, i=1) => `${imageId}?frame=${i}`);
+      const generatedImageIds = []
+      for (let i = 1; i <= numberOfFrames - 1; i++) {
+        generatedImageIds.push(`${imageId}?frame=${i}`)
+      }
+
+      setImageIds(generatedImageIds);
+
+      const element = elementRef.current!;
+      const renderingEngine = new RenderingEngine(renderingEngineId);
+      renderingEngineRef.current = renderingEngine;
+
+      renderingEngine.setViewports([
+        {
+          viewportId,
+          type: Enums.ViewportType.STACK,
+          element,
+        },
+      ]);
+
+      const viewport = renderingEngine.getViewport(viewportId) as Types.IStackViewport;
+      viewportRef.current = viewport;
+
+      await viewport.setStack(generatedImageIds);
+      await viewport.setImageIdIndex(0);
+
+      [PanTool, ZoomTool, WindowLevelTool, LengthTool, RectangleROITool, EllipticalROITool, AngleTool].forEach(addTool);
+
+      const toolGroup = ToolGroupManager.createToolGroup(toolGroupId);
+
+      [PanTool, ZoomTool, WindowLevelTool, LengthTool, RectangleROITool, EllipticalROITool, AngleTool].forEach((Tool) => {
+        toolGroup.addTool(Tool.toolName);
+      });
+
+      toolGroup.addViewport(viewportId, renderingEngineId);
+      setLoaded(true);
+      viewport.render();
+    };
+
+    initialize();
+
+    return () => {
+      ToolGroupManager.destroyToolGroup(toolGroupId);
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
+  }, []);
+
+ const [activeTool, setActiveTool] = useState<string | null>(null);
+
+ function getFrameIndexFromAnnotation(ann:any) {
+  if (!ann.imageId) return 0;
+  const match = ann.imageId.match(/\\?frame=(\\d+)/);
+  console.log(match)
+  if (match) {
+    return parseInt(match[1], 10) - 1; // usually frame is 1-based
+  }
+  return 0;
+}
+
+const handleToolChange = (selectedToolName: string) => {
+  const toolGroup = ToolGroupManager.getToolGroup(toolGroupId);
+  if (!toolGroup) return;
+
+  [PanTool, ZoomTool, WindowLevelTool, LengthTool, RectangleROITool, EllipticalROITool, AngleTool].forEach((Tool) => {
+    if (Tool.toolName === selectedToolName) {
+      toolGroup.setToolActive(Tool.toolName, {
+        bindings: [{ mouseButton: csToolsEnums.MouseBindings.Primary }],
+      });
+      setActiveTool(selectedToolName);
+      console.log('trying to call ')
+    } else {
+      toolGroup.setToolPassive(Tool.toolName);
+    }
+  });
+  settoolusedonframe(prev => prev.includes(selectedToolName) ? prev : [...prev, selectedToolName]);
+  viewportRef.current?.render();
+};
+// Helper to extract frame index from annotation.imageId
+
+// In your useEffect for annotationAdded:
+useEffect(() => {
+  function handleAnnotationAdded(evt: any) {
+    const ann = evt.detail.annotation;
+    console.log(ann)
+  }
+  eventTarget.addEventListener('annotationAdded', handleAnnotationAdded);
+  return () => {
+    eventTarget.removeEventListener('annotationAdded', handleAnnotationAdded);
+  };
+}, [frameIndex]);
+
+// Add this effect:
+/*useEffect(() => {
+
+  if (activeTool) {
+    bookmark();
+  }
+}, [frameIndex, activeTool]);*/
+  function handleannotation(evt: any) {
+    console.log(toolusedonframe)
+    const { annotation: ann } = evt.detail
+    if (ann.frameIndex === frameIndex && toolusedonframe.includes(ann.toolName)) {
+      console.log('inside the condition brother')
+      setbookmarkarray(prev => prev.includes(frameIndex) ? prev : [...prev, frameIndex])
+      setbookmark(true)
+    }
+  }
+
+  useEffect(() => {
+    eventTarget.addEventListener('annotationAdded', handleannotation)
+    return () => {
+      eventTarget.removeEventListener('annotationAdded', handleannotation)
+    }
+  },[frameIndex,toolusedonframe])
+
+  function trackNewAnnotations() {
+    const annotations = annotation.state.getAllAnnotations();
+    annotations.forEach((a) => {
+      undostack.push({
+        uid: a.annotationUID,
+        annotations: a
+      });
+    });
+  }
+  function undo() {
+    trackNewAnnotations()
+    if (undostack.length === 0) return;
+    const last = undostack.pop();
+    annotation.state.removeAnnotation(last.uid);
+    redostack.push({
+      uid: last.uid,
+      ann: last.annotations
+    })
+    viewportRef.current?.render();
+  };
+  function redo() {
+    if (redostack.length === 0) return;
+
+    const lastRedo = redostack.pop();
+    const { uid, annotation: annToRestore } = lastRedo;
+    console.log(lastRedo)
+
+    annotation.state.addAnnotation(lastRedo.ann, annotationGroupId);
+
+    undostack.push({
+      uid: lastRedo.ann.annotationUID,
+      annotation: annToRestore,
+    });
+
+    viewportRef.current?.render();
+  }
+
+  function clear() {
+    annotation.state.removeAllAnnotations()
+    console.log(annotation.state.getAllAnnotations())
+    viewportRef.current?.render();
+
+  }
+  const capture = () => {
+    const element = elementRef.current;
+    if (!element) return;
+    const canvas = element.querySelector('.cornerstone-canvas') as HTMLCanvasElement;
+    const svg = element.querySelector('.svg-layer') as SVGSVGElement;
+
+    if (!canvas || !svg) {
+      console.log('Canvas or SVG annotation layer not found');
+      return;
+    }
+
+    // Get bounding rects for canvas and SVG
+    const canvasRect = canvas.getBoundingClientRect();
+    const svgRect = svg.getBoundingClientRect();
+
+    // Create a new canvas to export
+    const exportCanvas = document.createElement('canvas');
+    exportCanvas.width = canvas.width;
+    exportCanvas.height = canvas.height;
+    const ctx = exportCanvas.getContext('2d');
+    if (!ctx) return;
+
+    // Draw the base image
+    ctx.drawImage(canvas, 0, 0);
+
+    // Create a new SVG with only the annotation shapes
+    const newSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    newSvg.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+    newSvg.setAttribute('width', String(svgRect.width));
+    newSvg.setAttribute('height', String(svgRect.height));
+    newSvg.setAttribute('viewBox', `0 0 ${svgRect.width} ${svgRect.height}`);
+
+    // Copy all child nodes (annotation shapes) from the original SVG
+    Array.from(svg.childNodes).forEach((child) => {
+      if (child.nodeType === 1) {
+        newSvg.appendChild(child.cloneNode(true));
+      }
+    });
+
+    // Serialize SVG and draw it on the canvas
+    const svgData = new XMLSerializer().serializeToString(newSvg);
+    const svgBlob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
+    const url = URL.createObjectURL(svgBlob);
+    const svgImage = new window.Image();
+
+    svgImage.onload = () => {
+      // Calculate the offset and scale to match the DOM overlay
+      const scaleX = canvas.width / canvasRect.width;
+      const scaleY = canvas.height / canvasRect.height;
+      const offsetX = (svgRect.left - canvasRect.left) * scaleX;
+      const offsetY = (svgRect.top - canvasRect.top) * scaleY;
+      const drawWidth = svgRect.width * scaleX;
+      const drawHeight = svgRect.height * scaleY;
+      ctx.drawImage(svgImage, offsetX, offsetY, drawWidth, drawHeight);
+      // Export as PNG
+      const dataURL = exportCanvas.toDataURL('image/png');
+      const link = document.createElement('a');
+      link.href = dataURL;
+      link.download = 'capture-with-annotations.png';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    };
+    svgImage.src = url;
+    /*
+    const element = elementRef.current;
+    const canvas = element.querySelector('.cornerstone-canvas');
+    const svg = element.querySelector('.svg-layer');
+  
+    if (!canvas || !svg) return;
+  
+    const exportCanvas = document.createElement('canvas');
+    exportCanvas.width = canvas.width;
+    exportCanvas.height = canvas.height;
+    const ctx = exportCanvas.getContext('2d');
+  
+    // Draw base canvas image
+    ctx.drawImage(canvas, 0, 0);
+  
+    // Create SVG copy with adjusted viewBox
+    const clonedSvg = svg.cloneNode(true);
+    clonedSvg.setAttribute('width', canvas.width);
+    clonedSvg.setAttribute('height', canvas.height);
+    clonedSvg.setAttribute('viewBox', `0 0 ${canvas.width} ${canvas.height}`);
+  
+    // Serialize and render SVG
+    const svgData = new XMLSerializer().serializeToString(clonedSvg);
+    const svgBlob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
+    const url = URL.createObjectURL(svgBlob);
+    const svgImage = new Image();
+  
+    svgImage.onload = () => {
+      // Draw SVG overlay at exact canvas dimensions
+      ctx.drawImage(svgImage, 0, 0, canvas.width, canvas.height);
+      
+      // Export as PNG
+      const dataURL = exportCanvas.toDataURL('image/png');
+      const link = document.createElement('a');
+      link.href = dataURL;
+      link.download = 'capture-with-annotations.png';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    };
+  
+    svgImage.src = url;*/
+  };
+
+
+
+  function bookmark() {
+    console.log(frameIndex)
+    const bookmarkedindex = frameIndex
+    setbookmarkarray(prev => [...prev, bookmarkedindex])
+
+    getBookmarkLeft(bookmarkedindex, totalFrames)
+    setbookmark(true)
+    console.log('book mark added')
+  }
+  const getBookmarkLeft = (bookmarkedindex: number, totalFrames: number) => {
+    if (bookmarkedindex == null || totalFrames <= 1) return '0%';
+    const percent = (bookmarkedindex / (totalFrames - 1)) * 100 + 2.12;
+    console.log(percent)
+    return `${percent.toFixed(2)}%`;  // :white_check_mark: Keep two decimal places for precision
+  };
+
+
+  useEffect(() => {
+    console.log(bookmarkarray)
+    settoolusedonframe([])
+  },[])
+  return (
+    <div className="flex flex-col items-center justify-center min-h-screen bg-black text-white p-6">
+      <h2 className="text-xl font-bold mb-4">DICOM Video Viewer</h2>
+
+      <div className="w-full max-w-4xl flex">
+        <div className="flex-1">
+          {loaded && (
+            <div className="flex flex-wrap justify-center gap-3 mb-4">
+              {[RectangleROITool, PanTool, ZoomTool, WindowLevelTool, LengthTool, EllipticalROITool, AngleTool].map((Tool) => (
+                <button
+                  key={Tool.toolName}
+                  onClick={() => handleToolChange(Tool.toolName)}
+                  className="bg-gray-700 px-3 py-1 rounded hover:bg-gray-600 text-sm"
+                >
+                  {Tool.toolName}
+                </button>
+              ))}
+              <button className="bg-gray-700 px-3 py-1 rounded hover:bg-gray-600 text-sm" onClick={handlePrev}>
+                &lt; Prev
+              </button>
+
+              <button
+                className='bg-gray-700 px-3 py-1 rounded hover:bg-gray-600 text-sm'
+                onClick={handlePlayPause}
+              >
+                {isPlaying ? '⏸ Pause' : '▶ Play'}
+              </button>
+
+              <button className="bg-gray-700 px-3 py-1 rounded hover:bg-gray-600 text-sm" onClick={handleNext}>
+                Next &gt;
+              </button>
+              <button className="bg-gray-700 px-3 py-1 rounded hover:bg-gray-600 text-sm" onClick={undo}>
+                Undo
+              </button>
+              <button className="bg-gray-700 px-3 py-1 rounded hover:bg-gray-600 text-sm" onClick={redo}>
+                Redo
+              </button>
+              <button className="bg-gray-700 px-3 py-1 rounded hover:bg-gray-600 text-sm" onClick={clear}>
+                Clear
+              </button>
+              <button className="bg-purple-600 px-3 py-1 rounded hover:bg-purple-500 mt-2" >
+                Get Measurements
+              </button>
+              <button className="bg-purple-600 px-3 py-1 rounded hover:bg-purple-500 mt-2" onClick={capture}>
+                Capture
+              </button>
+              <button className="bg-purple-600 px-3 py-1 rounded hover:bg-purple-500 mt-2" onClick={bookmark}>
+                Bookmark
+              </button>
+            </div>
+          )}
+
+          <div ref={elementRef} className="border border-gray-500 bg-gray-900 mx-auto" style={{ width: '512px', height: '412px', touchAction: 'none' }} />
+
+          <div className="mt-2 text-center">
+            Frame: {frameIndex + 1} of {totalFrames} | Status: {isPlaying ? 'Playing' : 'Paused'}
+          </div>
+
+          <div className="relative w-full px-4 py-6">
+
+            <input
+              type="range"
+              min="0"
+              max={Math.max(totalFrames - 1, 0)}
+              value={frameIndex}
+              onChange={handleSliderChange}
+              className="w-full relative z-10 mt-2"
+            // Optional: to set bookmark
+            />
+            {/* Bookmarks Track Layer */}
+            <div className="absolute top-9.5 left-0 w-full h-0 z-1000">
+              {(bookmarklabel) && (
+                bookmarkarray.map((bookmarkedframe, index) => (
+                  <div
+                    key={index}
+                    className="absolute"
+                    style={{
+                      left: getBookmarkLeft(bookmarkedframe, totalFrames),
+                      transform: 'translate(-9%,-12%)',
+                    }}
+                  >
+                    <div className="w-4 h-4 bg-yellow-300 rounded-full border border-black shadow-md"></div>
+                  </div>
+                ))
+
+              )}
+            </div>
+            {/* Actual Input */}
+          </div>
+
+        </div>
+
+      </div>
+    </div>
+  );
+}
