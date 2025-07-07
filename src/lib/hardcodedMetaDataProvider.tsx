@@ -1,3 +1,4 @@
+// Add hardcoded meta data provider for color images
 export default function hardcodedMetaDataProvider(type, imageId, imageIds) {
   const colonIndex = imageId.indexOf(':');
   const scheme = imageId.substring(0, colonIndex);
